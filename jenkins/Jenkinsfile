@@ -1,0 +1,81 @@
+/* groovylint-disable DuplicateNumberLiteral, DuplicateStringLiteral, LineLength, NestedBlockDepth */
+/* groovylint-disable-next-line CompileStatic */
+tfToolsImage         = 'marcportabellaclotet/tftools:1.0.11'
+tfToolsContainerName = 'tftools'
+tfCodePath           = 'example'
+
+yamldefinition = """
+kind: Pod
+spec:
+  containers:
+  - name: ${tfToolsContainerName}
+    image: ${tfToolsImage}
+    imagePullPolicy: IfNotPresent
+    tty: true
+    command:
+    - /bin/cat
+"""
+
+pipeline {
+  agent {
+    kubernetes {
+      yaml yamldefinition
+    }
+  }
+  stages {
+    stage('Terraform Pre-Checks') {
+      steps {
+        script {
+          container(tfToolsContainerName) {
+            TF_FMT_CHECK_EC = sh( script: 'terraform fmt -recursive', returnStatus: true )
+            dir(tfCodePath) {
+              TFSEC_CHECK_EC = sh( script: 'tfsec --no-color', returnStatus: true )
+            }
+          }
+        }
+      }
+    }
+    stage('Terraform Plan') {
+      steps {
+        script {
+          container(tfToolsContainerName) {
+            dir(tfCodePath) {
+              TF_INIT_EC = sh( script: 'terraform init -no-color', returnStatus: true )
+              TF_PLAN_EC = sh( script: "terraform plan -no-color -detailed-exitcode -out=${TF_PLAN_PATH}", returnStatus: true )
+            }
+          }
+          if ( TF_FMT_CHECK_EC != 0 ) { error('Terraform Format Check Failed') }
+          if ( TFSEC_CHECK_EC != 0 ) { error('Terraform Security Check Failed') }
+          if ( TF_INIT_EC != 0 ) { error('Terraform Init Failed') }
+          if ( TF_PLAN_EC == 1 ) { error('Terraform Plan Failed') }
+        }
+      }
+    }
+    stage('Terraform Apply') {
+      when {
+        allOf {
+          branch 'main'
+          expression { TF_PLAN_EC == 2 }
+        }
+      }
+      steps {
+        script {
+          container(tfToolsContainerName) {
+            dir(tfCodePath) {
+              sh( script: "terraform apply -input=false ${TF_PLAN_PATH}", returnStatus: true )
+            }
+          }
+        }
+      }
+    }
+  }
+  environment {
+    AWS_DEFAULT_REGION = 'us-west-2'
+    TF_PLAN_PATH = 'tfplan.out'
+  }
+  options {
+    buildDiscarder(logRotator(numToKeepStr: '15', artifactNumToKeepStr: '15'))
+    disableConcurrentBuilds()
+  }
+}
+

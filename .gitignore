@@ -1,0 +1,9 @@
+.idea/
+.terraform
+.terraform.lock*
+terraform.tfstate
+*.tfstate*
+terraform.tfvars
+modules.json
+.terraform/
+.terragrunt*
