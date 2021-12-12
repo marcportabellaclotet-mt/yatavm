@@ -1,6 +1,6 @@
 output "vpc_id" {
   description = "Returns VPC id"
-  value       = aws_vpc.this["myvpc"].id
+  value       = aws_vpc.this[var.name].id
 }
 
 output "public_subnet_ids" {

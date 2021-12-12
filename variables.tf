@@ -145,6 +145,11 @@ variable "private_subnet_suffix" {
 ################################################################################
 # ACL
 ################################################################################
+variable "create_acl_rules" {
+  description = "Wether to create Network ACL rules or not"
+  type        = bool
+  default     = false
+}
 
 variable "public_inbound_acl_rules" {
   description = "Public subnets inbound network ACLs"
@@ -170,3 +175,12 @@ variable "private_outbound_acl_rules" {
   default     = {}
 }
 
+################################################################################
+# NAT_GATEWAY
+################################################################################
+
+variable "shared_nat_gateway" {
+  description = "Wether to use 1 shared nat gateway or use one per each AZ"
+  type        = bool
+  default     = true
+}

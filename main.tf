@@ -109,12 +109,18 @@ resource "aws_route" "public_internet_gateway" {
   }
 }
 
+resource "aws_route_table_association" "public" {
+  for_each = var.create_vpc ? local.public_subnets : {}
+  subnet_id      = aws_subnet.public[each.key].id
+  route_table_id = aws_route_table.public[var.name].id
+}
+
 ################################################################################
 # NAT Gateway
 ################################################################################
 
 resource "aws_eip" "nat" {
-  for_each = var.create_vpc ? local.private_subnets : {}
+  for_each = (var.create_vpc && ! var.shared_nat_gateway) ? local.private_subnets : {}
 
   vpc = true
 
@@ -127,14 +133,14 @@ resource "aws_eip" "nat" {
   )
 }
 
-resource "aws_nat_gateway" "this" {
-  for_each = var.create_vpc ? local.private_subnets : {}
+resource "aws_nat_gateway" "nat" {
+  for_each = (var.create_vpc && ! var.shared_nat_gateway ) ? local.public_subnets : {}
 
   allocation_id = aws_eip.nat[each.key].id
-  subnet_id     = aws_subnet.private[each.key].id
+  subnet_id     = aws_subnet.public[each.key].id
   tags = merge(
     {
-      "Name" = format("%s-${var.private_subnet_suffix}-%s", var.name, each.value.az)
+      "Name" = format("%s-${var.public_subnet_suffix}-%s", var.name, each.value.az)
       "VPC"  = format("%s", var.name)
     },
     var.tags
@@ -142,6 +148,34 @@ resource "aws_nat_gateway" "this" {
   depends_on = [aws_internet_gateway.this]
 }
 
+resource "aws_eip" "single_nat" {
+  for_each = (var.create_vpc && var.shared_nat_gateway) ? { "${var.name}" : {} } : {}
+
+  vpc = true
+
+  tags = merge(
+    {
+      "Name" = format("nat-%s-${var.private_subnet_suffix}", var.name)
+      "VPC"  = format("%s", var.name)
+    },
+    var.tags
+  )
+}
+
+resource "aws_nat_gateway" "single_nat" {
+  for_each = (var.create_vpc && var.shared_nat_gateway ) ? { "${var.name}" : {} } : {}
+
+  allocation_id = aws_eip.single_nat[each.key].id
+  subnet_id     = tolist([for subnet in aws_subnet.public : subnet.id])[0]
+  tags = merge(
+    {
+      "Name" = format("%s-${var.private_subnet_suffix}", var.name)
+      "VPC"  = format("%s", var.name)
+    },
+    var.tags
+  )
+  depends_on = [aws_internet_gateway.this]
+}
 
 ################################################################################
 # Private routes
@@ -164,24 +198,41 @@ resource "aws_route_table" "private" {
 }
 
 resource "aws_route" "private_nat_gateway" {
-  for_each = var.create_vpc ? aws_route_table.private : {}
+  for_each =  (var.create_vpc && ! var.shared_nat_gateway) ? aws_route_table.private : {}
 
   route_table_id         = aws_route_table.private[each.key].id
   destination_cidr_block = "0.0.0.0/0"
-  nat_gateway_id         = aws_nat_gateway.this[each.key].id
+  nat_gateway_id         = aws_nat_gateway.nat[each.key].id
 
   timeouts {
     create = "5m"
   }
 }
 
+resource "aws_route" "single_private_nat_gateway" {
+  for_each =  (var.create_vpc && var.shared_nat_gateway) ? aws_route_table.private : {}
+
+  route_table_id         = aws_route_table.private[each.key].id
+  destination_cidr_block = "0.0.0.0/0"
+  nat_gateway_id         = tolist([for ng in aws_nat_gateway.single_nat : ng.id])[0]
+
+  timeouts {
+    create = "5m"
+  }
+}
+
+resource "aws_route_table_association" "private" {
+  for_each = var.create_vpc ? local.private_subnets : {}
+  subnet_id      = aws_subnet.private[each.key].id
+  route_table_id = aws_route_table.private[each.key].id
+}
 
 ################################################################################
 # Public Network ACLs
 ################################################################################
 
 resource "aws_network_acl" "public" {
-  for_each = var.create_vpc ? { "${var.name}" : {} } : {}
+  for_each = (var.create_vpc && var.create_acl_rules) ? { "${var.name}" : {} } : {}
 
   vpc_id     = aws_vpc.this[var.name].id
   subnet_ids = tolist([for subnet in aws_subnet.public : subnet.id])
@@ -225,7 +276,7 @@ resource "aws_network_acl_rule" "public_egress" {
 ################################################################################
 
 resource "aws_network_acl" "private" {
-  for_each = var.create_vpc ? { "${var.name}" : {} } : {}
+  for_each = (var.create_vpc && var.create_acl_rules) ? { "${var.name}" : {} } : {}
 
   vpc_id     = aws_vpc.this[var.name].id
   subnet_ids = tolist([for subnet in aws_subnet.private : subnet.id])
